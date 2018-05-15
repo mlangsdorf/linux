@@ -444,7 +444,7 @@ tsk	.req	x28		// current thread_info
 	ldr_l	x1, handle_arch_irq
 	mov	x0, sp
 	irq_stack_entry
-	blr	x1
+	blr_nospec	x1
 	irq_stack_exit
 	.endm
 
@@ -933,7 +933,7 @@ SYM_CODE_START(ret_from_fork)
 	bl	schedule_tail
 	cbz	x19, 1f				// not a kernel thread
 	mov	x0, x20
-	blr	x19
+	blr_nospec	 x19
 1:	get_current_task tsk
 	b	ret_to_user
 SYM_CODE_END(ret_from_fork)

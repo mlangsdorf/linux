@@ -14,6 +14,53 @@
 #include <asm/kvm_asm.h>
 #include <asm/smp_plat.h>
 
+#ifdef CONFIG_RETPOLINE
+static inline bool retp_compiler(void)
+{
+        return __is_defined(RETPOLINE);
+}
+
+/* The Spectre V2 mitigation variants */
+enum spectre_v2_mitigation {
+        SPECTRE_V2_NOT_AFFECTED,
+        SPECTRE_V2_RETPOLINE_MINIMAL,
+        SPECTRE_V2_RETPOLINE_GENERIC,
+};
+
+static const char *spectre_v2_strings[] = {
+        [SPECTRE_V2_NOT_AFFECTED]       = "Not affected",
+        [SPECTRE_V2_RETPOLINE_MINIMAL]  = "Vulnerable: Minimal ASM retpoline",
+        [SPECTRE_V2_RETPOLINE_GENERIC]  = "Mitigation: Full retpoline",
+};
+
+static enum spectre_v2_mitigation spectre_v2_enabled = SPECTRE_V2_NOT_AFFECTED;
+
+static bool spectre_v2_bad_module;
+
+bool retpoline_module_ok(bool has_retpoline)
+{
+        if (has_retpoline)
+                return true;
+
+        pr_err("System may be vulnerable to spectre v2\n");
+        spectre_v2_bad_module = true;
+        return false;
+}
+
+static inline const char *spectre_v2_module_string(void)
+{
+        return spectre_v2_bad_module ? " - vulnerable module loaded" : "";
+}
+
+static void enable_retpoline(const struct arm64_cpu_capabilities *__unused)
+{
+        spectre_v2_enabled = retp_compiler() ? SPECTRE_V2_RETPOLINE_GENERIC :
+                                               SPECTRE_V2_RETPOLINE_MINIMAL;
+}
+#else
+static bool spectre_v2_mitigation spectre_v2_enabled = false;
+#endif
+
 static bool __maybe_unused
 is_affected_midr_range(const struct arm64_cpu_capabilities *entry, int scope)
 {
@@ -531,6 +578,9 @@ int get_spectre_v2_workaround_state(void)
 	if (__spectrev2_safe)
 		return ARM64_BP_HARDEN_NOT_REQUIRED;
 
+	if (spectre_v2_enabled)
+		return ARM64_BP_HARDEN_RETPOLINE;
+
 	if (!__hardenbp_enab)
 		return ARM64_BP_HARDEN_UNKNOWN;
 
@@ -698,51 +748,6 @@ static const struct arm64_cpu_capabilities qcom_erratum_1003_list[] = {
 	},
 	{},
 };
-
-#ifdef CONFIG_RETPOLINE
-static inline bool retp_compiler(void)
-{
-	return __is_defined(RETPOLINE);
-}
-
-/* The Spectre V2 mitigation variants */
-enum spectre_v2_mitigation {
-	SPECTRE_V2_NOT_AFFECTED,
-	SPECTRE_V2_RETPOLINE_MINIMAL,
-	SPECTRE_V2_RETPOLINE_GENERIC,
-};
-
-static const char *spectre_v2_strings[] = {
-	[SPECTRE_V2_NOT_AFFECTED]	= "Not affected",
-	[SPECTRE_V2_RETPOLINE_MINIMAL]	= "Vulnerable: Minimal ASM retpoline",
-	[SPECTRE_V2_RETPOLINE_GENERIC]	= "Mitigation: Full retpoline",
-};
-
-static enum spectre_v2_mitigation spectre_v2_enabled = SPECTRE_V2_NOT_AFFECTED;
-
-static bool spectre_v2_bad_module;
-
-bool retpoline_module_ok(bool has_retpoline)
-{
-	if (has_retpoline)
-		return true;
-
-	pr_err("System may be vulnerable to spectre v2\n");
-	spectre_v2_bad_module = true;
-	return false;
-}
-
-static inline const char *spectre_v2_module_string(void)
-{
-	return spectre_v2_bad_module ? " - vulnerable module loaded" : "";
-}
-
-static void
-enable_retpoline(const struct arm64_cpu_capabilities *__unused)
-{
-	spectre_v2_enabled = retp_compiler() ? SPECTRE_V2_RETPOLINE_GENERIC :
-					       SPECTRE_V2_RETPOLINE_MINIMAL;
-}
 #endif
 
 #ifdef CONFIG_ARM64_WORKAROUND_CLEAN_CACHE
@@ -1011,6 +1016,11 @@ ssize_t cpu_show_spectre_v2(struct device *dev, struct device_attribute *attr,
 		return sprintf(buf, "Not affected\n");
         case ARM64_BP_HARDEN_WA_NEEDED:
 		return sprintf(buf, "Mitigation: Branch predictor hardening\n");
+	case ARM64_BP_HARDEN_RETPOLINE:
+		return sprintf(buf, "%s%s\n",
+			spectre_v2_strings[spectre_v2_enabled],
+			spectre_v2_module_string());
+
         case ARM64_BP_HARDEN_UNKNOWN:
 	default:
 		return sprintf(buf, "Vulnerable\n");
